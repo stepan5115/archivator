@@ -1,8 +1,8 @@
 CC=gcc
-SRSC=arch.c
+SRCS=arch.c
 TARGET=arch
 
 all:
-	$(CC) -o $(TARGET) $(SCRC)
+	$(CC) -o $(TARGET) $(SRCS)
 clean:
 	rm -f $(TARGET)

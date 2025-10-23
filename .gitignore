@@ -1,3 +1,4 @@
 *.o
 *.aut
 arch
+*.txt
