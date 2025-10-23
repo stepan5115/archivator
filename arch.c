@@ -63,6 +63,18 @@ int add_file(const char *archive_name, const char *filename) {
     if (hdr_read == 0) {
         arch_hdr.magic = ARCHIVE_MAGIC;
         arch_hdr.num_files = 1;
+	if (lseek(fd_archive, 0, SEEK_SET) < 0) {
+            perror("lseek");
+            close(fd_file);
+            close(fd_archive);
+            return -1;
+	}
+	if (write(fd_archive, &arch_hdr, sizeof(arch_hdr)) != sizeof(arch_hdr)) {
+            perror("write header");
+            close(fd_file);
+            close(fd_archive);
+            return -1;
+        }
     } else if (arch_hdr.magic != ARCHIVE_MAGIC) {
         perror("Not a valid archive");
         close(fd_file);
@@ -73,6 +85,7 @@ int add_file(const char *archive_name, const char *filename) {
     }
     //save old data
     off_t old_size = lseek(fd_archive, 0, SEEK_END) - sizeof(arch_hdr);
+    int absolute_old_offset = old_size + sizeof(arch_hdr);
     char *tmp_buf = NULL;
     if (old_size > 0) {
         tmp_buf = malloc(old_size);
@@ -83,13 +96,14 @@ int add_file(const char *archive_name, const char *filename) {
             return -1;
 	}
         if (pread(fd_archive, tmp_buf, old_size, sizeof(arch_hdr)) != old_size) {
-	    perror("pread"); free(tmp_buf);
+	    perror("pread");
+	    free(tmp_buf);
 	    close(fd_file);
             close(fd_archive);
             return -1;
 	}
     }
-    //
+    //go to start
     if (lseek(fd_archive, 0, SEEK_SET) < 0) {
 	perror("lseek");
 	free(tmp_buf);
@@ -97,6 +111,7 @@ int add_file(const char *archive_name, const char *filename) {
         close(fd_archive);
         return -1;
     }
+    //write edit arch header
     if (write(fd_archive, &arch_hdr, sizeof(arch_hdr)) != sizeof(arch_hdr)) {
 	perror("write header");
 	free(tmp_buf);
@@ -104,7 +119,9 @@ int add_file(const char *archive_name, const char *filename) {
         close(fd_archive);
         return -1;
     }
-    entry.data_offset = sizeof(arch_hdr) + arch_hdr.num_files * sizeof(entry);
+    //remember position of file data
+    entry.data_offset = absolute_old_offset + sizeof(entry);
+    //write new header
     if (write(fd_archive, &entry, sizeof(entry)) != sizeof(entry)) {
 	perror("write entry");
 	free(tmp_buf);
@@ -112,6 +129,7 @@ int add_file(const char *archive_name, const char *filename) {
         close(fd_archive);
         return -1;	
     }
+    //return old data on new place
     if (old_size > 0) {
         if (write(fd_archive, tmp_buf, old_size) != old_size) {
 	    perror("write old bytes");
@@ -122,6 +140,7 @@ int add_file(const char *archive_name, const char *filename) {
 	}
         free(tmp_buf);
     }
+    //add new file data
     char buf[4096];
     ssize_t r;
     while ((r = read(fd_file, buf, sizeof(buf))) > 0) {
