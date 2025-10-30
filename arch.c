@@ -5,6 +5,9 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <stdlib.h>
+#include <errno.h>
+#include <utime.h>
+#include <time.h>
 #define NAME_LEN 256
 #define ARCHIVE_MAGIC 0xDEADBEEF //0xDE, 0xAD, 0xBE, 0xEF
 
@@ -26,6 +29,15 @@ void print_help() {
     printf("./archiver arch_name -e file1 file2   //extract file1 from archive to file2\n");
     printf("./archiver arch_name -s               //show archive contents\n");
     printf("./archiver -h                         //get help\n");
+}
+
+void mode_to_string(mode_t mode, char *out) {
+    const char chars[] = "rwxrwxrwx";
+    out[0] = S_ISDIR(mode) ? 'd' : '-';
+    for (int i = 0; i < 9; i++) {
+        out[i + 1] = (mode & (1 << (8 - i))) ? chars[i] : '-';
+    }
+    out[10] = '\0';
 }
 
 int check_archive(const char *archive_name) {
@@ -165,7 +177,20 @@ int extract_file(const char *archive_name, const char *file_to_extract, const ch
             write(out_fd, buf, entry.size);
             free(buf);
             close(out_fd);
-
+	    //start recovering
+	    struct utimbuf new_times;
+            new_times.actime = entry.mtime;
+	    new_times.modtime = entry.mtime;
+	    if (utime(out_name, &new_times) < 0) {
+    	        perror("utime");
+	    }
+	    if (chown(out_name, entry.uid, entry.gid) < 0 && errno != EPERM) {
+    	        perror("chown");
+	    }
+	    if (chmod(out_name, entry.mode) < 0) {
+    	        perror("chmod");
+	    }
+	    //end recovering
             printf("Extracted: %s → %s\n", entry.name, out_name);
             break;
         } else {
@@ -218,6 +243,50 @@ int extract_file(const char *archive_name, const char *file_to_extract, const ch
 }
 
 int show_stat(const char* archive_name) {
+    int fd = open(archive_name, O_RDONLY);
+    if (fd < 0) {
+        perror("open archive");
+        return -1;
+    }
+
+    off_t archive_end = lseek(fd, 0, SEEK_END);
+    if (archive_end <= 0) {
+        printf("Archive is empty or corrupted.\n");
+        close(fd);
+        return -1;
+    }
+
+    lseek(fd, 0, SEEK_SET);
+    struct file_entry_disk entry;
+    int count = 0;
+
+    printf("Archive: %s\n", archive_name);
+    printf("%-25s %-10s %-10s %-10s %-10s %s\n",
+           "Name", "Size", "UID", "GID", "Mode", "Modified");
+    while (read(fd, &entry, sizeof(entry)) == sizeof(entry)) {
+        char mode_str[11];
+        mode_to_string(entry.mode, mode_str);
+
+        char time_str[20];
+        struct tm *tm_info = localtime((time_t *)&entry.mtime);
+        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M", tm_info);
+
+        printf("%-25s %-10lu %-8u %-8u %-12s %-20s\n",
+               entry.name,
+               (unsigned long)entry.size,
+               entry.uid,
+               entry.gid,
+               mode_str,
+               time_str);
+	count++;
+        lseek(fd, entry.size, SEEK_CUR);
+    }
+    if (count == 0)
+        printf("Archive is empty.\n");
+    else
+        printf("\nTotal files: %d\n", count);
+
+    close(fd);
     return 0;
 }
 
